@@ -1,0 +1,636 @@
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { 
+  LayoutDashboard, Truck, Upload, Receipt, FileText, 
+  PieChart, Settings, Search, Plus, Trash2, Edit2, 
+  ChevronRight, ChevronLeft, Download, X, Calendar,
+  TrendingUp, TrendingDown, Package, Activity, User,
+  Gauge, Wrench, DollarSign, BarChart3, FileSearch,
+  AlertTriangle, ArrowRight, Save, Building2, CheckCircle2,
+  ArrowUpCircle, ArrowDownCircle, Filter, Banknote
+} from 'lucide-react';
+import { 
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, 
+  ResponsiveContainer, Cell, Pie, PieChart as RePieChart, Legend
+} from 'recharts';
+
+// Firebase Imports
+import { initializeApp } from 'firebase/app';
+import { 
+  getFirestore, collection, doc, addDoc, updateDoc, 
+  deleteDoc, onSnapshot, writeBatch, query 
+} from 'firebase/firestore';
+import { 
+  getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken 
+} from 'firebase/auth';
+
+// --- CONFIGURAÇÃO FIREBASE ---
+const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const auth = getAuth(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'fechamento-frota-v1';
+
+// --- CONSTANTES DE NEGÓCIO ---
+const VIEWS = {
+  DASHBOARD: 'dashboard',
+  VEHICLES: 'vehicles',
+  IMPORT: 'import',
+  TRANSACTIONS: 'transactions',
+  CLOSING: 'closing',
+  ALMOXARIFADO: 'almoxarifado',
+  RATEIO: 'rateio'
+};
+
+const FLEET_TYPES = {
+  LIGHT: 'Leve',
+  HEAVY: 'Pesada'
+};
+
+const VALID_CLASSES = [
+  'combustível', 'combustivel', 'oleo diesel', 'serviços de guincho', 'servicos de guincho',
+  'rat desp financeiras', 'moto taxi', 'material de seguranca e protecao',
+  'mat. segurança e prot. veículos', 'mat. seguranca e prot. veiculos',
+  'despesas de viagens e hospedagens', 'epi\'s', 'epis', 'lavagem de frotas',
+  'refeicao e lanches', 'manut. preventiva', 'manutencao preventiva',
+  'manut. preventiva (frota / maq)', 'manut. corretiva', 'manutencao corretiva',
+  'manut. corretiva (frota / maq)', 'manut. maquinas e equipamentos',
+  'manutencao / pecas e aces. veiculos', 'material de uso e consumo',
+  'ferramentas', 'manut. por acidente', 'manut. por acidente (frota / maq)',
+  'servicos de terceiros', 'ordenados', 'reforma de frota', 'reforma de frota (veiculos / equip)',
+  'reforma de veiculos', 'fretes s/ compras', 'fretes', 'servicos de pneus',
+  'servicos de pneus / borracharia', 'borracharia', 'pneus e cameras - novos',
+  'pneus novos', 'pneus ressolados', 'ressolados', 'pedagio', 'mensalidades',
+  'seguros', 'dpvat', 'dpvat (seguro obrigatorio)', 'seguro obrigatorio',
+  'licenciamento', 'taxa de cobranca', 'taxa de cobrança', 'taxas inmetro',
+  'antt', 'inspecao veicular', 'inspeçao veicular', 'emplacamento de veiculo',
+  'emplacamento de veículo', 'servicos despachante policial', 'serviços despachante policial',
+  'melhoria em frotas', 'melhorias'
+];
+
+// --- HELPERS GLOBAIS ---
+const formatCurrency = (val) => {
+  if (val === undefined || val === null) return '—';
+  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
+};
+
+const formatNumber = (val) => new Intl.NumberFormat('pt-BR').format(val || 0);
+
+const cleanValue = (val) => {
+  if (typeof val !== 'string') return val;
+  let cleaned = val.replace(/^["']|["']$/g, '').trim();
+  const encodingMap = {
+    'Ã§': 'ç', 'Ã‡': 'Ç', 'Ã£': 'ã', 'Ãƒ': 'Ã', 'Ã¡': 'á', 'Ã': 'Á', 'Ã¢': 'â', 'Ã‚': 'Â',
+    'Ã©': 'é', 'Ã‰': 'É', 'Ãª': 'ê', 'ÃŠ': 'Ê', 'Ã­': 'í', 'Ã\u008d': 'Í', 'Ã³': 'ó', 
+    'Ã"': 'Ó', 'Ãµ': 'õ', 'Ã•': 'Õ', 'Ãº': 'ú', 'Ãš': 'Ú', 'Â°': '°', 'Âª': 'ª', 'Âº': 'º',
+  };
+  Object.keys(encodingMap).forEach(encoded => {
+    cleaned = cleaned.replace(new RegExp(encoded, 'g'), encodingMap[encoded]);
+  });
+  return cleaned;
+};
+
+// --- SUB-COMPONENTES EXTERNOS ---
+
+function Dashboard({ filteredExpenses, vehicles, filters }) {
+  const stats = useMemo(() => {
+    const totalCost = filteredExpenses.reduce((sum, exp) => sum + exp.amount, 0);
+    const maintenanceCost = filteredExpenses.filter(e => e.category === "Manutenção" || e.category === "Peças").reduce((sum, exp) => sum + exp.amount, 0);
+    const filteredVehicles = vehicles.filter(v => filters.fleetType === 'Todos' || v.type === filters.fleetType);
+    
+    // Multiplicador de período para KM Estimado
+    let multiplier = 1;
+    if (filters.periodType === 'Trimestre') multiplier = 3;
+    else if (filters.periodType === 'Semestre') multiplier = 6;
+    else if (filters.periodType === 'Ano') multiplier = 12;
+
+    let estimatedKm = filteredVehicles.reduce((acc, v) => acc + (v.type === FLEET_TYPES.HEAVY ? 8000 : 2500), 0) * multiplier;
+    return { totalCost, maintenanceCost, estimatedKm, costPerKm: estimatedKm > 0 ? totalCost / estimatedKm : 0 };
+  }, [filteredExpenses, vehicles, filters]);
+
+  const chartData = useMemo(() => {
+    const data = {};
+    filteredExpenses.forEach(exp => { data[exp.category] = (data[exp.category] || 0) + exp.amount; });
+    return Object.entries(data).map(([name, value]) => ({ name, value })).filter(i => i.value > 0);
+  }, [filteredExpenses]);
+
+  return (
+    <div className="space-y-8 animate-in fade-in duration-500">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <StatCard title="Custo Total" val={formatCurrency(stats.totalCost)} icon={<DollarSign size={20}/>} trend="Período" color="teal" />
+        <StatCard title="Km Estimado" val={`${formatNumber(stats.estimatedKm)} km`} icon={<Gauge size={20}/>} trend="Frota Ativa" color="emerald" />
+        <StatCard title="Manutenção" val={formatCurrency(stats.maintenanceCost)} icon={<Wrench size={20}/>} trend={`${((stats.maintenanceCost/stats.totalCost||0)*100).toFixed(1)}%`} color="rose" />
+        <StatCard title="Custo/KM" val={formatCurrency(stats.costPerKm)} icon={<Activity size={20}/>} trend="Eficiência" color="teal" />
+      </div>
+      <div className="bg-white rounded-[32px] p-8 border border-slate-100 shadow-xl shadow-slate-200/40">
+        <h3 className="text-xl font-bold text-slate-800 mb-6">Distribuição Financeira</h3>
+        <div className="h-[300px]">
+           <ResponsiveContainer width="100%" height="100%">
+             <BarChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#94a3b8', fontSize: 11}} />
+                <YAxis axisLine={false} tickLine={false} tick={{fill: '#94a3b8', fontSize: 11}} tickFormatter={v => `R$ ${v/1000}k`} />
+                <Tooltip cursor={{fill: '#f8fafc'}} formatter={v => formatCurrency(v)} />
+                <Bar dataKey="value" fill="#0d9488" radius={[8, 8, 0, 0]} barSize={40} />
+             </BarChart>
+           </ResponsiveContainer>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VehicleManager({ vehicles, db, appId }) {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [isFormOpen, setIsFormOpen] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const initialForm = { fleetName: '', plate: '', type: FLEET_TYPES.LIGHT, status: 'Ativo' };
+  const [formData, setFormData] = useState(initialForm);
+
+  const filtered = vehicles.filter(v => v.fleetName.toLowerCase().includes(searchTerm.toLowerCase()) || v.plate.toLowerCase().includes(searchTerm.toLowerCase()));
+
+  const handleSave = async () => {
+    const colRef = collection(db, 'artifacts', appId, 'public', 'data', 'vehicles');
+    if (editingId) await updateDoc(doc(colRef, editingId), formData);
+    else await addDoc(colRef, formData);
+    setIsFormOpen(false); setEditingId(null); setFormData(initialForm);
+  };
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-500">
+      <div className="flex flex-col md:flex-row justify-between items-center gap-4">
+        <div className="relative w-full md:w-96">
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+          <input className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200 rounded-2xl shadow-sm focus:ring-2 focus:ring-teal-500 outline-none font-medium" placeholder="Buscar frota..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+        </div>
+        <button onClick={() => { setEditingId(null); setFormData(initialForm); setIsFormOpen(true); }} className="bg-teal-600 text-white px-6 py-3 rounded-2xl font-bold shadow-lg shadow-teal-200 hover:bg-teal-700 transition flex items-center gap-2"><Plus size={18}/> Novo Veículo</button>
+      </div>
+      <div className="bg-white rounded-[32px] border border-slate-100 shadow-xl shadow-slate-200/30 overflow-hidden">
+        <table className="w-full text-left">
+          <thead>
+            <tr className="bg-slate-50/50 border-b border-slate-100">
+              <th className="px-8 py-5 text-xs font-black text-slate-400 uppercase tracking-widest">Identificação</th>
+              <th className="px-8 py-5 text-xs font-black text-slate-400 uppercase tracking-widest text-center">Tipo</th>
+              <th className="px-8 py-5 text-xs font-black text-slate-400 uppercase tracking-widest text-right">Ações</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-50">
+            {filtered.map(v => (
+              <tr key={v.id} className="hover:bg-teal-50/30 group transition-colors">
+                <td className="px-8 py-5">
+                  <div className="flex items-center gap-4">
+                    <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-slate-400 group-hover:bg-teal-100 group-hover:text-teal-600 transition"><Truck size={20}/></div>
+                    <div><p className="font-bold text-slate-800">{v.fleetName}</p><p className="text-xs font-mono font-bold text-slate-400">{v.plate}</p></div>
+                  </div>
+                </td>
+                <td className="px-8 py-5 text-center"><span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${v.type === FLEET_TYPES.HEAVY ? 'bg-indigo-100 text-indigo-700' : 'bg-teal-100 text-teal-700'}`}>{v.type}</span></td>
+                <td className="px-8 py-5 text-right"><div className="flex justify-end gap-1"><button onClick={() => { setEditingId(v.id); setFormData({...v}); setIsFormOpen(true); }} className="p-2 text-slate-300 hover:text-slate-600 transition-colors"><Edit2 size={18}/></button><button onClick={async () => { if(window.confirm('Excluir?')) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'vehicles', v.id)) }} className="p-2 text-slate-300 hover:text-rose-500 transition-colors"><Trash2 size={18}/></button></div></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {isFormOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+           <div className="bg-white rounded-[40px] shadow-2xl max-w-xl w-full p-10 animate-in zoom-in-95">
+              <h2 className="text-2xl font-black text-slate-800 mb-8">{editingId ? 'Editar Veículo' : 'Novo Veículo'}</h2>
+              <div className="grid grid-cols-2 gap-6">
+                 <FormField label="Frota" value={formData.fleetName} onChange={e=>setFormData({...formData, fleetName: e.target.value})} />
+                 <FormField label="Placa" value={formData.plate} onChange={e=>setFormData({...formData, plate: e.target.value})} />
+              </div>
+              <div className="flex gap-4 mt-10"><button onClick={()=>setIsFormOpen(false)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-bold text-slate-500">Cancelar</button><button onClick={handleSave} className="flex-1 py-4 bg-teal-600 text-white rounded-2xl font-bold shadow-lg shadow-teal-200">Salvar</button></div>
+           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ImportModule({ vehicles, db, appId, setCurrentView }) {
+  const [file, setFile] = useState(null);
+  const [previewData, setPreviewData] = useState([]);
+  const [importType, setImportType] = useState(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [missingFleets, setMissingFleets] = useState([]);
+  const fileInputRef = useRef(null);
+
+  const handleFileChange = (e) => {
+    const selectedFile = e.target.files?.[0];
+    if (selectedFile) {
+      setFile(selectedFile);
+      const reader = new FileReader();
+      reader.onload = (event) => processContent(event.target.result);
+      reader.readAsText(selectedFile, 'ISO-8859-1');
+    }
+  };
+
+  const processContent = (text) => {
+    const lines = text.split(/\r?\n/).filter(l => l.trim() !== '');
+    if (lines.length < 1) return;
+    const headers = lines[0].split(/[;\t]/).map(h => h.trim());
+    const type = headers.includes('PRMAT-CCUS') ? 'saida' : 'entrada';
+    setImportType(type);
+
+    const parsed = [];
+    const unmatched = new Set();
+
+    lines.slice(1).forEach(line => {
+      const cols = line.split(/[;\t]/).map(c => c.trim());
+      if (cols.length < 2) return;
+      const getCol = (name) => cols[headers.indexOf(name)] || '';
+
+      let exp = { id: Math.random().toString(36).substr(2, 9) };
+      let rawCCUS = type === 'entrada' ? getCol('PRGER-CCUS').replace(/^0+/, '') : getCol('PRMAT-CCUS').replace(/^0+/, '');
+      
+      exp.type = type === 'entrada' ? 'income' : 'expense';
+      exp.date = new Date().toISOString().split('T')[0];
+      exp.amount = type === 'entrada' ? (parseInt(getCol('PRGER-TOTA').replace(/\D/g, '')) / 100) : (parseInt(getCol('PRGER-TTEN').replace(/\D/g, '')) / 1000);
+      exp.description = type === 'entrada' ? getCol('PR-SORT') : getCol('PRMAT-NOME');
+      exp.category = type === 'entrada' ? getCol('PRGER-NPLC') : 'Estoque';
+
+      const ccusNum = rawCCUS.replace(/\D/g, '');
+      const v = vehicles.find(veh => veh.fleetName.replace(/\D/g, '').includes(ccusNum));
+      if (v) { exp.vehicleId = v.id; exp.fleetName = v.fleetName; }
+      else { exp.vehicleId = 'unknown'; exp.fleetName = `CCUS: ${rawCCUS}`; unmatched.add(rawCCUS); }
+      
+      parsed.push(exp);
+    });
+
+    setPreviewData(parsed);
+    setMissingFleets(Array.from(unmatched));
+  };
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    const batch = writeBatch(db);
+    previewData.forEach(item => batch.set(doc(collection(db, 'artifacts', appId, 'public', 'data', 'expenses')), item));
+    await batch.commit();
+    setCurrentView(VIEWS.TRANSACTIONS);
+  };
+
+  return (
+    <div className="space-y-8 animate-in fade-in duration-500">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="lg:col-span-1 space-y-6">
+          <div className={`border-4 border-dashed rounded-[40px] p-10 text-center transition-all bg-white relative ${file ? 'border-teal-500 bg-teal-50/30' : 'border-slate-200 hover:border-teal-400'}`}>
+            <input type="file" ref={fileInputRef} onChange={handleFileChange} className="absolute inset-0 opacity-0 cursor-pointer" accept=".txt" />
+            <div className="flex flex-col items-center">
+              {file ? <FileText size={32} className="text-teal-600 mb-4" /> : <Upload size={32} className="text-slate-400 mb-4" />}
+              <h3 className="font-black text-slate-700 uppercase tracking-tight">{file ? file.name : 'Solte o arquivo SAF'}</h3>
+            </div>
+          </div>
+          {previewData.length > 0 && (
+            <div className="bg-white p-8 rounded-[32px] border border-slate-100 shadow-xl">
+               <button onClick={handleSave} disabled={isSaving || missingFleets.length > 0} className={`w-full py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition ${missingFleets.length > 0 ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-teal-600 text-white hover:bg-teal-700'}`}>
+                 {isSaving ? 'Salvando...' : 'Confirmar Importação'}
+               </button>
+            </div>
+          )}
+        </div>
+        <div className="lg:col-span-2 bg-white rounded-[40px] border border-slate-100 shadow-xl overflow-hidden h-[600px] overflow-y-auto">
+           <table className="w-full text-left">
+              <thead className="sticky top-0 bg-slate-50">
+                 <tr><th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400">Data</th><th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400">Frota</th><th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 text-right">Valor</th></tr>
+              </thead>
+              <tbody className="divide-y">
+                 {previewData.map((item, i) => (
+                    <tr key={i} className="hover:bg-slate-50"><td className="px-6 py-4 text-xs font-bold">{item.date}</td><td className="px-6 py-4 text-xs font-black">{item.fleetName}</td><td className="px-6 py-4 text-xs font-black text-right">{formatCurrency(item.amount)}</td></tr>
+                 ))}
+              </tbody>
+           </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TransactionsView({ expenses, filters, db, appId, vehicles }) {
+  const [type, setType] = useState('income');
+  const [search, setSearch] = useState('');
+
+  const tableData = useMemo(() => {
+    return expenses
+      .filter(e => e.type === type)
+      .filter(e => {
+        const d = new Date(e.date);
+        const m = d.getMonth() + 1;
+        const y = d.getFullYear();
+        const v = parseInt(filters.periodValue);
+
+        const yearMatch = y === parseInt(filters.year);
+        let periodMatch = false;
+
+        if (filters.periodType === 'Mês') periodMatch = m === v;
+        else if (filters.periodType === 'Trimestre') periodMatch = Math.ceil(m / 3) === v;
+        else if (filters.periodType === 'Semestre') periodMatch = Math.ceil(m / 6) === v;
+        else if (filters.periodType === 'Ano') periodMatch = true;
+
+        return yearMatch && periodMatch;
+      })
+      .filter(e => {
+        const s = search.toLowerCase();
+        return e.fleetName?.toLowerCase().includes(s) || e.description?.toLowerCase().includes(s);
+      })
+      .sort((a, b) => (a.fleetName || '').localeCompare(b.fleetName || '', 'pt-BR', { numeric: true }));
+  }, [expenses, type, search, filters]);
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-500">
+      <div className="flex flex-col xl:flex-row justify-between items-center gap-6">
+        <div className="flex bg-slate-100 p-1.5 rounded-2xl">
+          <button onClick={() => setType('income')} className={`px-6 py-2.5 rounded-xl font-bold text-xs uppercase ${type === 'income' ? 'bg-white text-teal-600 shadow-md' : 'text-slate-400'}`}>Entradas</button>
+          <button onClick={() => setType('expense')} className={`px-6 py-2.5 rounded-xl font-bold text-xs uppercase ${type === 'expense' ? 'bg-white text-rose-600 shadow-md' : 'text-slate-400'}`}>Saídas</button>
+        </div>
+        <div className="relative xl:w-96">
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
+          <input className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200 rounded-2xl shadow-sm outline-none font-medium" placeholder="Buscar..." value={search} onChange={e => setSearch(e.target.value)} />
+        </div>
+      </div>
+      <div className="bg-white rounded-[32px] border border-slate-100 shadow-xl overflow-hidden">
+        <table className="w-full text-left">
+           <thead className="bg-slate-50/50 border-b">
+              <tr><th className="px-8 py-5 text-[10px] font-black text-slate-400 uppercase">Frota</th><th className="px-6 py-5 text-[10px] font-black text-slate-400 uppercase">Descrição</th><th className="px-6 py-5 text-[10px] font-black text-slate-400 uppercase text-right">Valor</th></tr>
+           </thead>
+           <tbody className="divide-y divide-slate-50">
+              {tableData.map(item => (
+                <tr key={item.id} className="hover:bg-teal-50/30 group">
+                  <td className="px-8 py-5 font-black text-slate-800">{item.fleetName}</td>
+                  <td className="px-6 py-5 text-xs text-slate-600">{cleanValue(item.description)}</td>
+                  <td className={`px-6 py-5 text-right font-black ${item.type === 'income' ? 'text-emerald-600' : 'text-rose-600'}`}>{formatCurrency(item.amount)}</td>
+                </tr>
+              ))}
+           </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function AlmoxarifadoView({ items, db, appId }) {
+  const [search, setSearch] = useState('');
+  const filtered = items.filter(i => i.descricaoMateria.toLowerCase().includes(search.toLowerCase()) || i.codMateria.toLowerCase().includes(search.toLowerCase()));
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-500">
+      <div className="flex justify-between items-center">
+         <h2 className="text-3xl font-black text-slate-800 tracking-tight">Almoxarifado</h2>
+         <div className="relative w-80">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+            <input className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200 rounded-2xl" placeholder="Buscar..." value={search} onChange={e=>setSearch(e.target.value)} />
+         </div>
+      </div>
+      <div className="bg-white rounded-[32px] border border-slate-100 shadow-xl overflow-hidden">
+        <table className="w-full text-left">
+           <thead className="bg-slate-50/50">
+              <tr><th className="px-8 py-5 text-[10px] font-black text-slate-400 uppercase">Código</th><th className="px-6 py-5 text-[10px] font-black text-slate-400 uppercase">Matéria</th><th className="px-6 py-5 text-[10px] font-black text-slate-400 uppercase">Classe</th></tr>
+           </thead>
+           <tbody className="divide-y divide-slate-50">
+              {filtered.map(item => (
+                <tr key={item.id} className="hover:bg-teal-50/30">
+                  <td className="px-8 py-5 text-xs font-black">{item.codMateria}</td>
+                  <td className="px-6 py-5 text-xs font-bold text-slate-600">{item.descricaoMateria}</td>
+                  <td className="px-6 py-5 text-[10px] font-black uppercase text-teal-600">{item.classe || 'Pendente'}</td>
+                </tr>
+              ))}
+           </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// --- COMPONENTE PRINCIPAL APP ---
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [currentView, setCurrentView] = useState(VIEWS.DASHBOARD);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [loading, setLoading] = useState(true);
+  
+  const [vehicles, setVehicles] = useState([]);
+  const [expenses, setExpenses] = useState([]);
+  const [almoxarifadoItems, setAlmoxarifadoItems] = useState([]);
+
+  // --- FILTROS ATUALIZADOS ---
+  const [filters, setFilters] = useState({
+    year: 2025,
+    periodType: 'Mês',
+    periodValue: new Date().getMonth() + 1,
+    fleetType: 'Todos',
+  });
+
+  useEffect(() => {
+    const initAuth = async () => {
+      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        await signInWithCustomToken(auth, __initial_auth_token);
+      } else {
+        await signInAnonymously(auth);
+      }
+    };
+    initAuth();
+    return onAuthStateChanged(auth, setUser);
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    setLoading(true);
+    
+    const unsubV = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'vehicles'), (snap) => {
+      setVehicles(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    const unsubE = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'expenses'), (snap) => {
+      setExpenses(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    const unsubA = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'almoxarifado'), (snap) => {
+      setAlmoxarifadoItems(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setLoading(false);
+    });
+
+    return () => { unsubV(); unsubE(); unsubA(); };
+  }, [user]);
+
+  // --- LÓGICA DE FILTRAGEM ATUALIZADA ---
+  const filteredExpensesMemo = useMemo(() => {
+    return expenses.filter(e => {
+      const d = new Date(e.date);
+      const m = d.getMonth() + 1;
+      const y = d.getFullYear();
+      const v = parseInt(filters.periodValue);
+
+      const yearMatch = y === parseInt(filters.year);
+      let periodMatch = false;
+
+      if (filters.periodType === 'Mês') periodMatch = m === v;
+      else if (filters.periodType === 'Trimestre') periodMatch = Math.ceil(m / 3) === v;
+      else if (filters.periodType === 'Semestre') periodMatch = Math.ceil(m / 6) === v;
+      else if (filters.periodType === 'Ano') periodMatch = true;
+
+      let fleetMatch = true;
+      if (filters.fleetType !== 'Todos') {
+        const vRef = vehicles.find(veh => veh.id === e.vehicleId || veh.fleetName === e.fleetName);
+        fleetMatch = vRef?.type === filters.fleetType;
+      }
+      return yearMatch && periodMatch && fleetMatch;
+    });
+  }, [expenses, filters, vehicles]);
+
+  // Opções dinâmicas baseadas no tipo de período
+  const periodValueOptions = useMemo(() => {
+    if (filters.periodType === 'Mês') {
+      return [
+        "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+        "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
+      ].map((name, i) => ({ v: i + 1, l: name }));
+    }
+    if (filters.periodType === 'Trimestre') {
+      return [1, 2, 3, 4].map(i => ({ v: i, l: `${i}º Trimestre` }));
+    }
+    if (filters.periodType === 'Semestre') {
+      return [1, 2].map(i => ({ v: i, l: `${i}º Semestre` }));
+    }
+    return [];
+  }, [filters.periodType]);
+
+  return (
+    <div className="flex h-screen bg-[#F8FAFC] text-slate-900 font-sans overflow-hidden selection:bg-teal-100">
+      
+      {/* Sidebar - Verde Água (Teal) */}
+      <aside className={`${isSidebarOpen ? 'w-72' : 'w-24'} bg-[#0F172A] text-white transition-all duration-500 flex flex-col z-30 shadow-2xl overflow-hidden`}>
+        <div className="h-24 flex items-center gap-4 px-8 mb-4">
+          <div className="w-12 h-12 bg-teal-600 rounded-2xl flex items-center justify-center shrink-0 shadow-lg shadow-teal-500/30">
+            <Truck size={24} className="text-white" />
+          </div>
+          {isSidebarOpen && (
+            <div className="animate-in fade-in slide-in-from-left-2 overflow-hidden">
+              <h1 className="font-black text-xl tracking-tighter uppercase italic whitespace-nowrap">Frota<span className="text-teal-400">Pro</span></h1>
+            </div>
+          )}
+        </div>
+        <nav className="flex-1 px-4 space-y-2">
+          {/* Atualizado para passar o estado collapsed */}
+          <SidebarLink active={currentView === VIEWS.DASHBOARD} onClick={() => setCurrentView(VIEWS.DASHBOARD)} icon={<LayoutDashboard size={22}/>} label="Dashboard" collapsed={!isSidebarOpen} />
+          <SidebarLink active={currentView === VIEWS.VEHICLES} onClick={() => setCurrentView(VIEWS.VEHICLES)} icon={<Truck size={22}/>} label="Gerir Frota" collapsed={!isSidebarOpen} />
+          <SidebarLink active={currentView === VIEWS.IMPORT} onClick={() => setCurrentView(VIEWS.IMPORT)} icon={<Upload size={22}/>} label="Importar SAF" collapsed={!isSidebarOpen} />
+          <SidebarLink active={currentView === VIEWS.TRANSACTIONS} onClick={() => setCurrentView(VIEWS.TRANSACTIONS)} icon={<Banknote size={22}/>} label="Lançamentos" collapsed={!isSidebarOpen} />
+          <SidebarLink active={currentView === VIEWS.CLOSING} onClick={() => setCurrentView(VIEWS.CLOSING)} icon={<FileText size={22}/>} label="Fechamento" collapsed={!isSidebarOpen} />
+          <SidebarLink active={currentView === VIEWS.ALMOXARIFADO} onClick={() => setCurrentView(VIEWS.ALMOXARIFADO)} icon={<Package size={22}/>} label="Almoxarifado" collapsed={!isSidebarOpen} />
+        </nav>
+        <div className="p-6 border-t border-slate-800">
+          <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="w-full h-12 flex items-center justify-center rounded-xl bg-slate-800/50 hover:bg-slate-800 transition text-slate-400">
+            {isSidebarOpen ? <ChevronLeft size={20}/> : <ChevronRight size={20}/>}
+          </button>
+        </div>
+      </aside>
+
+      <main className="flex-1 flex flex-col overflow-hidden">
+        <header className="h-24 bg-white/80 backdrop-blur-md border-b border-slate-100 px-10 flex items-center justify-between z-20 sticky top-0">
+          <div className="flex items-center gap-10">
+            <h2 className="text-2xl font-black text-slate-800 tracking-tight capitalize">{currentView}</h2>
+            
+            <div className="flex items-center bg-slate-100/80 p-1.5 rounded-2xl border border-slate-200 shadow-inner">
+               <FilterGroup 
+                 val={filters.periodType} 
+                 setVal={v => setFilters({...filters, periodType: v, periodValue: 1})} 
+                 options={['Mês', 'Trimestre', 'Semestre', 'Ano'].map(o => ({v: o, l: o}))} 
+               />
+               
+               {filters.periodType !== 'Ano' && (
+                 <>
+                   <div className="w-px h-6 bg-slate-300 mx-1"></div>
+                   <FilterGroup 
+                     val={filters.periodValue} 
+                     setVal={v => setFilters({...filters, periodValue: v})} 
+                     options={periodValueOptions} 
+                   />
+                 </>
+               )}
+
+               <div className="w-px h-6 bg-slate-300 mx-1"></div>
+               
+               <FilterGroup 
+                 val={filters.year} 
+                 setVal={v => setFilters({...filters, year: v})} 
+                 options={[2024, 2025, 2026].map(y => ({v: y, l: y}))} 
+               />
+            </div>
+          </div>
+          <div className="flex items-center gap-6">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-teal-500 to-emerald-600 p-[2px] shadow-lg shadow-teal-200">
+              <div className="w-full h-full bg-white rounded-[14px] flex items-center justify-center text-teal-600"><User size={20} /></div>
+            </div>
+          </div>
+        </header>
+
+        <section className="flex-1 overflow-y-auto p-10 bg-[#F8FAFC]">
+          <div className="max-w-7xl mx-auto">
+            {loading ? <div className="text-center font-black text-slate-300 uppercase py-20 tracking-widest animate-pulse">Sincronizando...</div> : (
+              <>
+                {currentView === VIEWS.DASHBOARD && <Dashboard filteredExpenses={filteredExpensesMemo} vehicles={vehicles} filters={filters} />}
+                {currentView === VIEWS.VEHICLES && <VehicleManager vehicles={vehicles} db={db} appId={appId} />}
+                {currentView === VIEWS.IMPORT && <ImportModule vehicles={vehicles} db={db} appId={appId} setCurrentView={setCurrentView} />}
+                {currentView === VIEWS.TRANSACTIONS && <TransactionsView expenses={expenses} filters={filters} db={db} appId={appId} vehicles={vehicles} />}
+                {currentView === VIEWS.ALMOXARIFADO && <AlmoxarifadoView items={almoxarifadoItems} db={db} appId={appId} />}
+              </>
+            )}
+          </div>
+        </section>
+      </main>
+    </div>
+  );
+}
+
+// --- COMPONENTE ATÔMICOS ---
+
+// Atualizado para ocultar o label quando a sidebar estiver fechada
+function SidebarLink({ icon, label, active, onClick, collapsed }) {
+  return (
+    <button onClick={onClick} className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl transition-all duration-300 group ${active ? 'bg-teal-600 text-white shadow-xl shadow-teal-500/20' : 'text-slate-500 hover:bg-slate-800 hover:text-white'}`}>
+      <span className={`${active ? 'text-white' : 'group-hover:text-teal-400'} shrink-0`}>{icon}</span>
+      {!collapsed && <span className="font-bold text-sm tracking-tight whitespace-nowrap animate-in fade-in duration-300">{label}</span>}
+    </button>
+  );
+}
+
+function StatCard({ title, val, icon, trend, color }) {
+  const themes = { 
+    teal: "from-teal-50 text-teal-600 border-teal-100 shadow-teal-100/50", 
+    rose: "from-rose-50 text-rose-600 border-rose-100 shadow-rose-100/50", 
+    emerald: "from-emerald-50 text-emerald-600 border-emerald-100 shadow-emerald-100/50" 
+  };
+  return (
+    <div className={`bg-gradient-to-br ${themes[color] || themes.teal} to-white p-8 rounded-[32px] border shadow-lg hover:scale-[1.02] transition-all`}>
+      <div className="flex justify-between items-start mb-6"><div className="p-3 bg-white rounded-2xl shadow-sm">{icon}</div><span className="text-[10px] font-black bg-white px-3 py-1 rounded-full border border-slate-100">{trend}</span></div>
+      <h4 className="text-[11px] font-black text-slate-400 uppercase tracking-widest mb-2">{title}</h4>
+      <p className="text-2xl font-black text-slate-900 tracking-tighter">{val}</p>
+    </div>
+  );
+}
+
+function FilterGroup({ val, setVal, options }) {
+  return (
+    <div className="flex flex-col px-4">
+      <select className="bg-transparent text-sm font-bold text-slate-600 outline-none cursor-pointer" value={val} onChange={e => setVal(e.target.value)}>
+        {options.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
+      </select>
+    </div>
+  );
+}
+
+function FormField({ label, value, onChange, placeholder, type = "text" }) {
+  return (
+    <div className="space-y-2">
+      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">{label}</label>
+      <input type={type} value={value} onChange={e => onChange(e.target.value)} className="w-full p-4 bg-slate-50 border-0 rounded-2xl font-bold text-slate-800 placeholder:text-slate-300 focus:ring-2 focus:ring-teal-500 outline-none transition" placeholder={placeholder} />
+    </div>
+  );
+}
+
+function DetailField({ label, val, isTotal }) {
+  return (
+    <div className="space-y-1">
+      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{label}</label>
+      <div className={`text-base font-bold ${isTotal ? 'text-teal-600 text-lg' : 'text-slate-800'}`}>{val || '—'}</div>
+    </div>
+  );
+}

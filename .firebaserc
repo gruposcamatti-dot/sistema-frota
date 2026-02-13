@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "gestao-frotas-36b82"
+  },
+  "targets": {
+    "gestao-frotas-36b82": {
+      "hosting": {
+        "app-principal": [
+          "gestaofrotasscamatti"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

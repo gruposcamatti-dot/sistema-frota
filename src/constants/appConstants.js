@@ -10,6 +10,7 @@ export const VIEWS = {
   RATEIO: 'rateio',
   RELATORIOS: 'relatorios',
   RESUMO: 'resumo',
+  ABASTECIMENTO: 'abastecimento',
   RATEIOS: 'rateios'
 };
 

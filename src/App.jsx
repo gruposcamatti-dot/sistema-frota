@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo, lazy, Suspense } from 'react';
 import {
   LayoutDashboard, Truck, Upload, FileText,
-  PieChart, Search, ChevronRight, ChevronLeft,
+  PieChart, Search, ChevronRight, ChevronLeft, Fuel,
   Package, User, BarChart3, FileSearch, Banknote, DollarSign
 } from 'lucide-react';
+import { supabase } from './utils/supabaseCliente';
 
 // Firebase Imports
 import {
@@ -33,6 +34,7 @@ const TransactionsView = lazy(() => import('./components/TransactionsView'));
 const FechamentoView = lazy(() => import('./components/FechamentoView'));
 const AlmoxarifadoView = lazy(() => import('./components/AlmoxarifadoView'));
 const RateiosView = lazy(() => import('./components/RateiosView'));
+const AbastecimentoView = lazy(() => import('./components/AbastecimentoView'));
 
 function LoadingSpinner() {
   return (
@@ -71,6 +73,8 @@ export default function App() {
   const [expenses, setExpenses] = useState([]);
   const [almoxarifadoItems, setAlmoxarifadoItems] = useState([]);
   const [rateios, setRateios] = useState([]);
+  const [abastecimentos, setAbastecimentos] = useState([]);
+  const [loadingAbastecimentos, setLoadingAbastecimentos] = useState(false);
 
   // --- FILTROS ATUALIZADOS ---
   const [filters, setFilters] = useState({
@@ -78,6 +82,7 @@ export default function App() {
     periodType: 'Mês',
     periodValue: new Date().getMonth() + 1,
     fleetType: 'Todos',
+    vehicleCategory: 'Todos',
   });
 
   useEffect(() => {
@@ -132,6 +137,53 @@ export default function App() {
     return () => { unsubV(); unsubE(); unsubA(); unsubR(); };
   }, [user]);
 
+  const fetchAbastecimentos = async () => {
+    try {
+      setLoadingAbastecimentos(true);
+
+      let allData = [];
+      let from = 0;
+      const step = 1000;
+      let fetchMore = true;
+
+      while (fetchMore) {
+        const { data, error } = await supabase
+          .from('abastecimentos')
+          .select('motorista, placa, frota, tipo_combustivel, litro_abastecido, horimetro, preco_combustivel, data_registro')
+          .order('data_registro', { ascending: false })
+          .range(from, from + step - 1);
+
+        if (error) {
+          throw error;
+        }
+
+        if (data && data.length > 0) {
+          allData = [...allData, ...data];
+          if (data.length < step) {
+            fetchMore = false; // Last chunk
+          } else {
+            from += step; // Prepare next chunk
+          }
+        } else {
+          fetchMore = false; // No more data
+        }
+      }
+
+      setAbastecimentos(allData);
+
+    } catch (error) {
+      console.error('Erro ao buscar dados do Supabase:', error.message);
+    } finally {
+      setLoadingAbastecimentos(false);
+    }
+  };
+
+  useEffect(() => {
+    if (user) {
+      fetchAbastecimentos();
+    }
+  }, [user]);
+
   // --- LÓGICA DE FILTRAGEM ATUALIZADA ---
   const filteredExpensesMemo = useMemo(() => {
     return expenses.filter(e => {
@@ -157,13 +209,56 @@ export default function App() {
       else if (filters.periodType === 'Ano') periodMatch = true;
 
       let fleetMatch = true;
+      const vRef = vehicles.find(veh => veh.id === e.vehicleId || veh.fleetName === e.fleetName);
+
       if (filters.fleetType !== 'Todos') {
-        const vRef = vehicles.find(veh => veh.id === e.vehicleId || veh.fleetName === e.fleetName);
-        fleetMatch = vRef?.type === filters.fleetType;
+        if (!vRef || vRef.type !== filters.fleetType) {
+          fleetMatch = false;
+        }
       }
-      return yearMatch && periodMatch && fleetMatch;
+
+      if (fleetMatch && filters.vehicleCategory && filters.vehicleCategory !== 'Todos') {
+        if (!vRef || vRef.segment !== filters.vehicleCategory) {
+          fleetMatch = false;
+        }
+      }
+
+      // EXCLUDE Rateio items from main views
+      const isNotRateio = e.scope !== 'rateio';
+
+      return yearMatch && periodMatch && fleetMatch && isNotRateio;
     });
   }, [expenses, filters, vehicles]);
+
+  // --- FILTRO ESPECÍFICO PARA RATEIOS (Ignora Tipo de Frota) ---
+  const rateioExpensesMemo = useMemo(() => {
+    return expenses.filter(e => {
+      let y, m;
+      if (e.date && typeof e.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(e.date)) {
+        const parts = e.date.split('-');
+        y = parseInt(parts[0]);
+        m = parseInt(parts[1]);
+      } else {
+        const d = new Date(e.date);
+        m = d.getMonth() + 1;
+        y = d.getFullYear();
+      }
+      const v = parseInt(filters.periodValue);
+
+      const yearMatch = y === parseInt(filters.year);
+      let periodMatch = false;
+
+      if (filters.periodType === 'Mês') periodMatch = m === v;
+      else if (filters.periodType === 'Trimestre') periodMatch = Math.ceil(m / 3) === v;
+      else if (filters.periodType === 'Semestre') periodMatch = Math.ceil(m / 6) === v;
+      else if (filters.periodType === 'Ano') periodMatch = true;
+
+      // INCLUDE ONLY Rateio items
+      const isRateio = e.scope === 'rateio';
+
+      return yearMatch && periodMatch && isRateio;
+    });
+  }, [expenses, filters]);
 
   // Opções dinâmicas baseadas no tipo de período
   const periodValueOptions = useMemo(() => {
@@ -211,6 +306,7 @@ export default function App() {
           <SidebarLink active={currentView === VIEWS.TRANSACTIONS} onClick={() => setCurrentView(VIEWS.TRANSACTIONS)} icon={<DollarSign size={22} />} label="Lançamentos" collapsed={!isSidebarOpen} />
           <SidebarLink active={currentView === VIEWS.RESUMO} onClick={() => setCurrentView(VIEWS.RESUMO)} icon={<BarChart3 size={22} />} label="Resumo" collapsed={!isSidebarOpen} />
           <SidebarLink active={currentView === VIEWS.RATEIOS} onClick={() => setCurrentView(VIEWS.RATEIOS)} icon={<PieChart size={22} />} label="Rateios" collapsed={!isSidebarOpen} />
+          <SidebarLink active={currentView === VIEWS.ABASTECIMENTO} onClick={() => setCurrentView(VIEWS.ABASTECIMENTO)} icon={<Fuel size={20} />} label="Abastecimento" collapsed={!isSidebarOpen} />
 
           {/* Grupo: Base de Dados */}
           {isSidebarOpen && (
@@ -230,7 +326,7 @@ export default function App() {
       </aside>
 
       <main className="flex-1 flex flex-col overflow-hidden">
-        {currentView !== VIEWS.IMPORT && currentView !== VIEWS.VEHICLES && currentView !== VIEWS.ALMOXARIFADO && currentView !== VIEWS.RELATORIOS && currentView !== VIEWS.RESUMO && currentView !== VIEWS.TRANSACTIONS && currentView !== VIEWS.CLOSING && currentView !== VIEWS.DASHBOARD && currentView !== VIEWS.RATEIOS && (
+        {currentView !== VIEWS.IMPORT && currentView !== VIEWS.VEHICLES && currentView !== VIEWS.ALMOXARIFADO && currentView !== VIEWS.RELATORIOS && currentView !== VIEWS.RESUMO && currentView !== VIEWS.TRANSACTIONS && currentView !== VIEWS.CLOSING && currentView !== VIEWS.DASHBOARD && currentView !== VIEWS.RATEIOS && currentView !== VIEWS.ABASTECIMENTO && (
           <header className="h-24 bg-white/80 backdrop-blur-md border-b border-slate-100 px-10 flex items-center justify-between z-20 sticky top-0">
             <div className="flex items-center gap-10">
               <h2 className="text-2xl font-black text-slate-800 tracking-tight capitalize">{currentView}</h2>
@@ -269,7 +365,7 @@ export default function App() {
           <div className="max-w-7xl mx-auto">
             {loading ? <div className="text-center font-black text-slate-300 uppercase py-20 tracking-widest animate-pulse">Sincronizando...</div> : (
               <Suspense fallback={<LoadingSpinner />}>
-                {currentView === VIEWS.DASHBOARD && <Dashboard filteredExpenses={filteredExpensesMemo} vehicles={vehicles} filters={filters} setFilters={setFilters} />}
+                {currentView === VIEWS.DASHBOARD && <Dashboard filteredExpenses={filteredExpensesMemo} vehicles={vehicles} filters={filters} setFilters={setFilters} abastecimentos={abastecimentos} />}
                 {currentView === VIEWS.VEHICLES && <VehicleManager vehicles={vehicles} db={db} appId={appId} />}
                 {currentView === VIEWS.IMPORT && <ImportModule vehicles={vehicles} db={db} appId={appId} setCurrentView={setCurrentView} almoxarifadoItems={almoxarifadoItems} expenses={expenses} />}
                 {currentView === VIEWS.TRANSACTIONS && (
@@ -288,11 +384,12 @@ export default function App() {
                     />
                   </Suspense>
                 )}
-                {currentView === VIEWS.CLOSING && <FechamentoView expenses={expenses} filteredExpenses={filteredExpensesMemo} filters={filters} setFilters={setFilters} vehicles={vehicles} />}
+                {currentView === VIEWS.CLOSING && <FechamentoView expenses={expenses} filteredExpenses={filteredExpensesMemo} filters={filters} setFilters={setFilters} vehicles={vehicles} rateios={rateios} rateioExpenses={rateioExpensesMemo} />}
                 {currentView === VIEWS.ALMOXARIFADO && <AlmoxarifadoView items={almoxarifadoItems} db={db} appId={appId} />}
                 {currentView === VIEWS.RELATORIOS && <EmDesenvolvimento titulo="Relatórios" />}
                 {currentView === VIEWS.RESUMO && <EmDesenvolvimento titulo="Resumo" />}
-                {currentView === VIEWS.RATEIOS && <RateiosView rateios={rateios} db={db} appId={appId} filters={filters} setFilters={setFilters} />}
+                {currentView === VIEWS.RATEIOS && <RateiosView rateios={rateios} expenses={rateioExpensesMemo} db={db} appId={appId} filters={filters} setFilters={setFilters} vehicles={vehicles} />}
+                {currentView === VIEWS.ABASTECIMENTO && <AbastecimentoView filters={filters} setFilters={setFilters} vehicles={vehicles} abastecimentos={abastecimentos} fetchAbastecimentos={fetchAbastecimentos} loadingAbastecimentos={loadingAbastecimentos} />}
               </Suspense>
             )}
           </div>

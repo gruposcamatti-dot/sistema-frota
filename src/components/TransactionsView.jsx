@@ -46,6 +46,11 @@ export default function TransactionsView({ expenses, filteredExpenses, setExpens
         const cleanPayload = {
           date: editingExpense.date,
           vehicleId: editingExpense.vehicleId,
+          fleetName: (() => {
+            if (editingExpense.vehicleId === 'unknown') return '';
+            const v = vehicles.find(v => v.id === editingExpense.vehicleId);
+            return v ? v.fleetName : (editingExpense.fleetName || '');
+          })(),
           description: editingExpense.description,
           category: editingExpense.category,
           provider: editingExpense.provider || '',
@@ -108,7 +113,12 @@ export default function TransactionsView({ expenses, filteredExpenses, setExpens
 
   const handleSaveNew = async () => {
     if (newExpense && newExpense.description && newExpense.amount) {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'expenses'), newExpense);
+      const selectedVehicle = vehicles.find(v => v.id === newExpense.vehicleId);
+      const expenseToSave = {
+        ...newExpense,
+        fleetName: selectedVehicle ? selectedVehicle.fleetName : '',
+      };
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'expenses'), expenseToSave);
       setIsCreating(false);
       setNewExpense(null);
     } else {
@@ -705,28 +715,28 @@ export default function TransactionsView({ expenses, filteredExpenses, setExpens
             <div className="p-8">
               {selectedExpense.type === 'income' ? (
                 <div className="grid grid-cols-3 gap-y-8 gap-x-4">
-                  <DetailItem label="DATA LANÇAMENTO" value={cleanValue(selectedExpense.details?.lctoDate)} />
-                  <DetailItem label="DATA EMISSÃO" value={cleanValue(selectedExpense.details?.emisDate)} />
+                  <DetailItem label="DATA LANÇAMENTO" value={cleanValue(selectedExpense.details?.lctoDate) || cleanValue(selectedExpense.date)} />
+                  <DetailItem label="DATA EMISSÃO" value={cleanValue(selectedExpense.details?.emisDate) || cleanValue(selectedExpense.date)} />
                   <DetailItem label="NOTA FISCAL" value={cleanValue(selectedExpense.details?.notaFiscal)} />
-                  <DetailItem label="EMPRESA" value={cleanValue(selectedExpense.details?.empresa)} />
-                  <DetailItem label="FORNECEDOR" value={cleanValue(selectedExpense.details?.fornecedor)} colSpan={2} />
+                  <DetailItem label="EMPRESA" value={cleanValue(selectedExpense.details?.empresa) || 'Manual'} />
+                  <DetailItem label="FORNECEDOR" value={cleanValue(selectedExpense.details?.fornecedor) || cleanValue(selectedExpense.provider)} colSpan={2} />
                   <DetailItem label="CÓD. FORNECEDOR" value={cleanValue(selectedExpense.details?.codFornecedor)} />
-                  <DetailItem label="CLASSE" value={cleanValue(selectedExpense.details?.classe)} />
+                  <DetailItem label="CLASSE" value={cleanValue(selectedExpense.details?.classe) || cleanValue(selectedExpense.category)} />
                   <DetailItem label="ORDEM DE COMPRA" value={cleanValue(selectedExpense.details?.ordemCompra)} />
                   <DetailItem label="DESCRIÇÃO" value={cleanValue(selectedExpense.description)} colSpan={3} />
                   <DetailItem label="VALOR TOTAL" value={formatCurrency(selectedExpense.amount)} isTotal />
                 </div>
               ) : (
                 <div className="grid grid-cols-3 gap-y-8 gap-x-4">
-                  <DetailItem label="DATA" value={cleanValue(selectedExpense.details?.date)} />
+                  <DetailItem label="DATA" value={cleanValue(selectedExpense.details?.date) || cleanValue(selectedExpense.date)} />
                   <DetailItem label="CÓD. LANÇAMENTO" value={cleanValue(selectedExpense.details?.codLancamento)} />
-                  <DetailItem label="EMPRESA" value={cleanValue(selectedExpense.details?.empresa)} />
-                  <DetailItem label="MATÉRIA / DESCRIÇÃO" value={cleanValue(selectedExpense.details?.materia)} colSpan={2} />
+                  <DetailItem label="EMPRESA" value={cleanValue(selectedExpense.details?.empresa) || 'Manual'} />
+                  <DetailItem label="MATÉRIA / DESCRIÇÃO" value={cleanValue(selectedExpense.details?.materia) || cleanValue(selectedExpense.description)} colSpan={2} />
                   <DetailItem label="DESCRIÇÃO (SISTEMA)" value={cleanValue(selectedExpense.description)} colSpan={3} />
                   <DetailItem label="CÓD. MATÉRIA" value={cleanValue(selectedExpense.details?.codMateria)} />
                   <DetailItem label="QUANTIDADE" value={selectedExpense.details?.quantidade || '0'} />
-                  <DetailItem label="VALOR ENTRADA" value={formatCurrency(selectedExpense.details?.valorEntrada || 0)} />
-                  <DetailItem label="VALOR TOTAL" value={formatCurrency(selectedExpense.details?.valorTotal || 0)} isTotal />
+                  <DetailItem label="VALOR ENTRADA" value={formatCurrency(selectedExpense.details?.valorEntrada || selectedExpense.amount)} />
+                  <DetailItem label="VALOR TOTAL" value={formatCurrency(selectedExpense.details?.valorTotal || selectedExpense.amount)} isTotal />
                   <DetailItem label="RECEBEDOR" value={cleanValue(selectedExpense.details?.recebedor)} />
                   <DetailItem label="ALMOXARIFADO" value={cleanValue(selectedExpense.details?.almoxarifado)} />
                 </div>

@@ -211,12 +211,31 @@ export default function ImportModule({ vehicles, db, appId, setCurrentView, almo
           codFornecedor: getCol('PRGPR-FORN'),
           fiscal: getCol('PRGER-NFIS'),
           classe: getCol('PRGER-NPLC'),
-          ordemCompra: getCol('PRENT-ORDE')
+          ordemCompra: getCol('PRENT-ORDE'),
         };
+
+        // Regra robusta de detecção de Rateio (Visão/Divisão 2002 ou CCs específicos)
+        const RATEIO_IDENTIFIERS = ['1034', '1058', '1065', '1088', '1097', '1233', '2002'];
+        const division = (getCol('DET01-DIVISAO') || getCol('DET01-VISIAO') || '').replace(/\D/g, '');
+        const cleanCCEntry = ccusNumber.replace(/\D/g, '');
+
+        if (RATEIO_IDENTIFIERS.includes(division) || RATEIO_IDENTIFIERS.includes(cleanCCEntry)) {
+          expense.scope = 'rateio';
+        } else {
+          expense.scope = 'fleet';
+        }
+
       } else {
         rawFleetName = getCol('PRMAT-CCUS');
         expense.type = 'expense';
         expense.date = parseDate(getCol('PRGER-DATA'));
+
+        // Verifica se é Rateio por Centro de Custo para Saída
+        const RATEIO_IDENTIFIERS = ['1034', '1058', '1065', '1088', '1097', '1233', '2002'];
+        const cleanCC = rawFleetName.replace(/\D/g, '');
+        if (RATEIO_IDENTIFIERS.includes(cleanCC)) {
+          expense.scope = 'rateio';
+        }
 
         const rawTotal = parseInt(getCol('PRGER-TTEN').replace(/\D/g, '') || '0', 10);
         const rawVren = parseInt(getCol('PRGER-VREN').replace(/\D/g, '') || '0', 10);
@@ -267,16 +286,31 @@ export default function ImportModule({ vehicles, db, appId, setCurrentView, almo
       if (vehicle) {
         expense.vehicleId = vehicle.id;
         expense.fleetName = vehicle.fleetName;
+        if (!expense.scope) expense.scope = 'fleet';
       } else {
-        expense.vehicleId = 'unknown';
-        expense.fleetName = `CCUS: " ${rawFleetName}"`;
-        if (rawFleetName && rawFleetName.trim() !== '') {
-          unmatchedFleets.add(rawFleetName.trim());
+        // Se não achou veiculo:
+        if (expense.scope === 'rateio') {
+          expense.vehicleId = 'rateio';
+          expense.fleetName = `CCUS: ${rawFleetName}`;
+        } else if (detectedType === 'saida') {
+          // Saída sem veiculo correspondente e não identificado previamente como CC de rateio
+          // (Mas pela regra do usuário, se não tiver CC no sistema, deve ser rateio)
+          expense.scope = 'rateio';
+          expense.vehicleId = 'rateio';
+          expense.fleetName = `CCUS: ${rawFleetName}`;
+        } else {
+          // Entrada sem veiculo e NAO é divisão 2002
+          expense.vehicleId = 'unknown';
+          expense.fleetName = `CCUS: " ${rawFleetName}"`;
+          if (rawFleetName && rawFleetName.trim() !== '') {
+            unmatchedFleets.add(rawFleetName.trim());
+          }
+          expense.scope = 'fleet';
         }
       }
 
       if (detectedType === 'entrada') {
-        if (expense.category && expense.category !== 'Geral' && !isValidClass(expense.category)) {
+        if (expense.category && expense.category !== 'Geral' && !isValidClass(expense.category) && expense.scope !== 'rateio') {
           unmatchedClasses.add(expense.category.trim());
         }
       } else if (detectedType === 'saida') {

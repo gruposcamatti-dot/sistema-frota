@@ -1,6 +1,4 @@
 import React, { useState, useRef, useMemo } from 'react';
-import { List } from 'react-window';
-import { AutoSizer } from 'react-virtualized-auto-sizer';
 import { Search, Trash2, Upload, Plus, FileSearch, Edit2, Truck, X, Settings } from 'lucide-react';
 import { collection, addDoc, updateDoc, deleteDoc, doc, writeBatch } from 'firebase/firestore';
 import { FLEET_TYPES } from '../constants/appConstants';
@@ -40,14 +38,21 @@ export default function VehicleManager({ vehicles, db, appId }) {
   };
 
   const filteredVehicles = useMemo(() => {
+    if (!vehicles) return [];
     return vehicles.filter(v => {
       const term = searchTerm.toLowerCase();
+      const fleetName = (v.fleetName || '').toLowerCase();
+      const plate = (v.plate || '').toLowerCase();
+      const assetCode = (v.assetCode || '').toLowerCase();
+      const model = (v.model || '').toLowerCase();
+      const segment = (v.segment || '').toLowerCase();
+
       return (
-        v.fleetName.toLowerCase().includes(term) ||
-        v.plate.toLowerCase().includes(term) ||
-        (v.assetCode && v.assetCode.toLowerCase().includes(term)) ||
-        (v.model && v.model.toLowerCase().includes(term)) ||
-        (v.segment && v.segment.toLowerCase().includes(term))
+        fleetName.includes(term) ||
+        plate.includes(term) ||
+        assetCode.includes(term) ||
+        model.includes(term) ||
+        segment.includes(term)
       );
     });
   }, [vehicles, searchTerm]);
@@ -234,93 +239,98 @@ export default function VehicleManager({ vehicles, db, appId }) {
           <div className="w-[100px] text-[11px] font-black text-slate-400 uppercase tracking-widest text-right px-2">Ações</div>
         </div>
 
-        {/* Lista Virtualizada */}
-        <div className="min-w-[900px] h-[calc(100vh-220px)]">
-          <AutoSizer>
-            {({ height, width }) => (
-              <List
-                height={height}
-                width={width}
-                itemCount={filteredVehicles.length}
-                itemSize={72}
-                itemData={{
-                  items: filteredVehicles,
-                  selectedVehicles,
-                  handleSelectVehicle,
-                  handleEditVehicle,
-                  handleDeleteVehicle,
-                  setViewingVehicle,
-                  FLEET_TYPES
-                }}
-              >
-                {({ index, style, data }) => {
-                  const vehicle = data.items[index];
-                  const isSelected = data.selectedVehicles.has(vehicle.id);
-
-                  return (
-                    <div style={style} className={`flex items-center px-4 border-b border-slate-50 hover:bg-slate-50/80 transition-all group ${isSelected ? 'bg-teal-50/30' : ''}`}>
-                      <div className="w-[50px] flex justify-center flex-shrink-0">
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => data.handleSelectVehicle(vehicle.id)}
-                          className="w-4 h-4 rounded border-slate-300 cursor-pointer text-teal-600 focus:ring-teal-500"
-                        />
-                      </div>
-                      <div className="w-[15%] min-w-[120px] px-2 flex-shrink-0">
-                        <span className="text-sm font-bold text-slate-800 truncate block" title={vehicle.fleetName}>{vehicle.fleetName}</span>
-                      </div>
-                      <div className="w-[120px] px-2 flex-shrink-0">
-                        <span className="text-xs font-semibold text-slate-900 tracking-wide font-mono bg-slate-100 px-2 py-1 rounded">{vehicle.plate}</span>
-                      </div>
-                      <div className="w-[120px] px-2 flex-shrink-0">
-                        <span className="text-sm text-slate-700 font-medium truncate block" title={vehicle.assetCode}>{vehicle.assetCode || '—'}</span>
-                      </div>
-                      <div className="w-[15%] min-w-[150px] px-2 flex-shrink-0">
-                        <span className="text-sm text-slate-600 truncate block" title={vehicle.model}>{vehicle.model || '—'}</span>
-                      </div>
-                      <div className="w-[15%] min-w-[150px] px-2 flex-shrink-0">
-                        <span className="text-sm text-slate-600 truncate block" title={vehicle.segment}>{vehicle.segment || '—'}</span>
-                      </div>
-                      <div className="w-[140px] px-2 flex-shrink-0">
-                        <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${vehicle.type === data.FLEET_TYPES.HEAVY ? 'bg-indigo-100 text-indigo-700' : 'bg-teal-100 text-teal-700'}`}>
-                          {vehicle.type}
-                        </span>
-                      </div>
-                      <div className="w-[100px] px-2 flex-shrink-0">
-                        <span className={`px-2 py-1 rounded-full text-xs font-bold ${vehicle.status === 'Ativo' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-600'}`}>
-                          {vehicle.status}
-                        </span>
-                      </div>
-                      <div className="w-[100px] px-2 text-right flex justify-end gap-1 flex-shrink-0">
-                        <button
-                          onClick={() => data.setViewingVehicle(vehicle)}
-                          className="p-2 text-slate-300 hover:text-teal-600 transition-colors"
-                          title="Ver Detalhes"
-                        >
-                          <FileSearch size={18} />
-                        </button>
-                        <button
-                          onClick={() => data.handleEditVehicle(vehicle)}
-                          className="p-2 text-slate-300 hover:text-slate-600 transition-colors"
-                          title="Editar"
-                        >
-                          <Edit2 size={18} />
-                        </button>
-                        <button
-                          onClick={() => data.handleDeleteVehicle(vehicle.id)}
-                          className="p-2 text-slate-300 hover:text-rose-500 transition-colors"
-                          title="Excluir"
-                        >
-                          <Trash2 size={18} />
-                        </button>
-                      </div>
+        {/* Lista Padrão (Sem Virtualização para maior estabilidade) */}
+        <div className="flex-1 overflow-y-auto min-w-[900px]">
+          {filteredVehicles.length > 0 ? (
+            <div className="flex flex-col">
+              {filteredVehicles.map((vehicle) => {
+                const isSelected = selectedVehicles.has(vehicle.id);
+                return (
+                  <div key={vehicle.id} className={`flex items-center px-4 border-b border-slate-50 hover:bg-slate-50/80 transition-all group py-3 ${isSelected ? 'bg-teal-50/30' : ''}`}>
+                    <div className="w-[50px] flex justify-center flex-shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => handleSelectVehicle(vehicle.id)}
+                        className="w-4 h-4 rounded border-slate-300 cursor-pointer text-teal-600 focus:ring-teal-500"
+                      />
                     </div>
-                  );
-                }}
-              </List>
-            )}
-          </AutoSizer>
+
+                    <div className="w-[15%] min-w-[120px] px-2 flex-shrink-0">
+                      <span className="text-sm font-bold text-slate-800 truncate block" title={vehicle.fleetName}>
+                        {vehicle.fleetName || '—'}
+                      </span>
+                    </div>
+
+                    <div className="w-[120px] px-2 flex-shrink-0">
+                      <span className="text-xs font-semibold text-slate-900 tracking-wide font-mono bg-slate-100 px-2 py-1 rounded">
+                        {vehicle.plate || '—'}
+                      </span>
+                    </div>
+
+                    <div className="w-[120px] px-2 flex-shrink-0">
+                      <span className="text-sm text-slate-700 font-medium truncate block" title={vehicle.assetCode}>
+                        {vehicle.assetCode || '—'}
+                      </span>
+                    </div>
+
+                    <div className="w-[15%] min-w-[150px] px-2 flex-shrink-0">
+                      <span className="text-sm text-slate-600 truncate block" title={vehicle.model}>
+                        {vehicle.model || '—'}
+                      </span>
+                    </div>
+
+                    <div className="w-[15%] min-w-[150px] px-2 flex-shrink-0">
+                      <span className="text-sm text-slate-600 truncate block" title={vehicle.segment}>
+                        {vehicle.segment || '—'}
+                      </span>
+                    </div>
+
+                    <div className="w-[140px] px-2 flex-shrink-0">
+                      <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${vehicle.type === FLEET_TYPES.HEAVY ? 'bg-indigo-100 text-indigo-700' : 'bg-teal-100 text-teal-700'}`}>
+                        {vehicle.type || 'N/A'}
+                      </span>
+                    </div>
+
+                    <div className="w-[100px] px-2 flex-shrink-0">
+                      <span className={`px-2 py-1 rounded-full text-xs font-bold ${vehicle.status === 'Ativo' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-600'}`}>
+                        {vehicle.status || 'Inativo'}
+                      </span>
+                    </div>
+
+                    <div className="w-[100px] px-2 text-right flex justify-end gap-1 flex-shrink-0">
+                      <button
+                        onClick={() => setViewingVehicle(vehicle)}
+                        className="p-2 text-slate-300 hover:text-teal-600 transition-colors"
+                        title="Ver Detalhes"
+                      >
+                        <FileSearch size={18} />
+                      </button>
+                      <button
+                        onClick={() => handleEditVehicle(vehicle)}
+                        className="p-2 text-slate-300 hover:text-slate-600 transition-colors"
+                        title="Editar"
+                      >
+                        <Edit2 size={18} />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteVehicle(vehicle.id)}
+                        className="p-2 text-slate-300 hover:text-rose-500 transition-colors"
+                        title="Excluir"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center py-20 text-slate-400">
+              <Truck size={48} className="mb-4 opacity-20" />
+              <p className="text-sm font-medium">Nenhum veículo encontrado.</p>
+            </div>
+          )}
         </div>
 
         {/* Footer com total */}
